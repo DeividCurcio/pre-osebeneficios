@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Leitor de Código de Barras + QR + Validade com Beep</title>
+  
+  <!-- Biblioteca html5-qrcode -->
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f2f5;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      color: #2c3e50;
+    }
+    #reader {
+      width: 100%;
+      max-width: 500px;
+      margin: 20px auto;
+      border: 4px solid #3498db;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+    }
+    #result {
+      margin: 20px auto;
+      max-width: 600px;
+      background: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      line-height: 1.6;
+    }
+    button {
+      background: #e74c3c;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      font-size: 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin: 10px;
+    }
+    button:hover { background: #c0392b; }
+    #info { text-align: center; color: #7f8c8d; }
+    .success { color: #27ae60; font-weight: bold; }
+    .warning { color: #e67e22; font-weight: bold; }
+    .danger  { color: #c0392b; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <h1>Leitor de Produto + Validade (com som de beep!)</h1>
+  <p id="info">Aponte o código de barras ou QR Code para a câmera.<br>Você ouvirá um **beep** ao detectar!</p>
+
+  <div id="reader"></div>
+
+  <div style="text-align:center; margin:20px;">
+    <button id="startBtn">Iniciar Câmera</button>
+    <button id="stopBtn">Parar Câmera</button>
+  </div>
+
+  <div id="result">
+    <p>Aguardando leitura...</p>
+  </div>
+
+  <!-- Som de beep (scanner clássico) - royalty-free -->
+  <audio id="beepSound" preload="auto">
+    <source src="https://www.orangefreesounds.com/wp-content/uploads/2021/12/Barcode-scanner-beep-sound.mp3" type="audio/mpeg">
+    Seu navegador não suporta áudio.
+  </audio>
+
+  <script>
+    const html5QrCode = new Html5Qrcode("reader");
+    let scanning = false;
+    let ultimoCodigo = null;  // Evita beep repetido no mesmo código
+
+    const config = { fps: 10, qrbox: { width: 380, height: 380 } };
+
+    const beepAudio = document.getElementById("beepSound");
+
+    // Toca o beep (com reset para permitir múltiplos toques rápidos)
+    function playBeep() {
+      beepAudio.currentTime = 0;  // Reinicia o áudio
+      beepAudio.play().catch(e => console.log("Erro no áudio:", e));
+    }
+
+    // Função para buscar na Open Food Facts (igual antes)
+    async function buscarProduto(codigo) {
+      const url = `https://world.openfoodfacts.org/api/v0/product/${codigo}.json`;
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.status === 1) {
+          const p = data.product;
+          const nome = p.product_name_pt || p.product_name || "Nome não encontrado";
+          const marca = p.brands || "Marca desconhecida";
+          const nutriscore = (p.nutriscore_grade || "N/A").toUpperCase();
+          const ingredientes = p.ingredients_text_pt || p.ingredients_text || "Não disponível";
+
+          let beneficios = "Consulte ingredientes e Nutri-Score para mais detalhes.<br>";
+          if (["A","B"].includes(nutriscore)) beneficios += '<span class="success">✅ Ótima escolha nutricional!</span><br>';
+          else if (["C","D"].includes(nutriscore)) beneficios += '<span class="warning">⚠️ Moderado — consuma com moderação</span><br>';
+          else beneficios += "Nutri-Score não avaliado.<br>";
+
+          return { nome, marca, nutriscore, beneficios, ingredientes };
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // Atualiza a tela com resultado
+    function mostrarResultado(texto, ehProduto = false) {
+      const div = document.getElementById("result");
+      if (ehProduto) {
+        div.innerHTML = `
+          <h3>🛒 ${texto.nome}</h3>
+          <p><b>Marca:</b> ${texto.marca}</p>
+          <p><b>Nutri-Score:</b> ${texto.nutriscore}</p>
+          <p>${texto.beneficios}</p>
+          <p><b>Ingredientes (início):</b> ${texto.ingredientes.substring(0, 180)}...</p>
+          <hr>
+          <label>Digite a data de validade (DD/MM/AAAA) ou deixe em branco:</label><br>
+          <input type="text" id="validadeInput" placeholder="ex: 20/12/2026" style="padding:8px; width:180px; margin:10px 0;">
+          <button onclick="verificarValidade()">Verificar</button>
+          <p id="validadeMsg"></p>
+        `;
+      } else {
+        div.innerHTML = `<p><b>Detectado:</b> ${texto}</p>`;
+      }
+    }
+
+    // Verifica validade (igual antes)
+    window.verificarValidade = function() {
+      const input = document.getElementById("validadeInput")?.value.trim();
+      const msg = document.getElementById("validadeMsg");
+      if (!input || !msg) return;
+      try {
+        const [dd, mm, aaaa] = input.split("/").map(Number);
+        const validade = new Date(aaaa, mm-1, dd);
+        const hoje = new Date();
+        if (validade < hoje) {
+          msg.innerHTML = '<span class="danger">❌ PRODUTO VENCIDO! Não consuma.</span>';
+        } else {
+          const dias = Math.floor((validade - hoje) / (1000*60*60*24));
+          msg.innerHTML = `<span class="success">✅ Válido até \( {input} ( \){dias} dias restantes)</span>`;
+        }
+      } catch(e) {
+        msg.innerHTML = '<span class="warning">⚠️ Formato inválido — use DD/MM/AAAA</span>';
+      }
+    };
+
+    // Quando detecta código
+    function onScanSuccess(decodedText, decodedResult) {
+      // Evita repetir o mesmo código (anti-spam)
+      if (decodedText === ultimoCodigo) return;
+      ultimoCodigo = decodedText;
+
+      console.log(`Código: ${decodedText} | Tipo: ${decodedResult.result.formatName}`);
+      
+      // Toca o beep!
+      playBeep();
+
+      // Trata como produto se for numérico (EAN/UPC)
+      if (/^\d{8,13}$/.test(decodedText)) {
+        buscarProduto(decodedText).then(info => {
+          if (info) {
+            mostrarResultado(info, true);
+          } else {
+            mostrarResultado(`Produto não encontrado na base.<br>Código: ${decodedText}`);
+          }
+        });
+      } else {
+        // QR ou outro
+        if (decodedText.startsWith("http")) {
+          mostrarResultado(`<a href="\( {decodedText}" target="_blank"> \){decodedText}</a> (QR Code - clique para abrir)`);
+        } else {
+          mostrarResultado(`Conteúdo: ${decodedText}`);
+        }
+      }
+    }
+
+    // Iniciar câmera
+    document.getElementById("startBtn").onclick = () => {
+      if (scanning) return;
+      html5QrCode.start(
+        { facingMode: "environment" },
+        config,
+        onScanSuccess,
+        (err) => { console.log(`Erro na câmera: ${err}`); }
+      ).then(() => {
+        scanning = true;
+        document.getElementById("info").innerText = "Câmera ativa! Aponte o código... (beep ao detectar)";
+        ultimoCodigo = null;
+      }).catch(err => {
+        alert("Erro ao acessar câmera: " + err);
+      });
+    };
+
+    // Parar câmera
+    document.getElementById("stopBtn").onclick = () => {
+      if (!scanning) return;
+      html5QrCode.stop().then(() => {
+        scanning = false;
+        document.getElementById("info").innerText = "Câmera parada. Clique em Iniciar Câmera.";
+      });
+    };
+
+    // Suporte a upload de imagem
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.style.display = "block";
+    fileInput.style.margin = "20px auto";
+    document.body.appendChild(fileInput);
+
+    fileInput.onchange = e => {
+      if (e.target.files?.length) {
+        html5QrCode.scanFile(e.target.files[0], true)
+          .then(decoded => {
+            onScanSuccess(decoded, {});
+          })
+          .catch(err => alert("Não foi possível ler a imagem: " + err));
+      }
+    };
+  </script>
+
+</body>
+</html>
